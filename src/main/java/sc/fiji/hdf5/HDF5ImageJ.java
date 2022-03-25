@@ -36,6 +36,7 @@ import ij.process.ColorProcessor;
 import ch.systemsx.cisd.base.mdarray.MDByteArray;
 import ch.systemsx.cisd.base.mdarray.MDShortArray;
 import ch.systemsx.cisd.base.mdarray.MDFloatArray;
+import ch.systemsx.cisd.base.mdarray.MDIntArray;
 import hdf.hdf5lib.exceptions.HDF5Exception;
 import java.awt.HeadlessException;
 import java.util.ArrayList;
@@ -212,6 +213,7 @@ public class HDF5ImageJ
       int nBits     = 0;
       double maxGray = 1;
       String typeText = "";
+      String impTypeText = "";
       for (int frame = 0; frame < nFrames; ++frame) {
         for (int channel = 0; channel < nChannels; ++channel) {
           // load data set
@@ -262,15 +264,25 @@ public class HDF5ImageJ
             }
 
             nBits = assignHDF5TypeToImagePlusBitdepth( typeText, isRGB);
+            impTypeText = assignHDF5TypeToImagePlusTypeString(typeText, isRGB, nChannels, nBits);
 
 
-            imp = IJ.createHyperStack( filename + ": " + dsetName,
-                                       nCols, nRows, nChannels, nLevels, nFrames, nBits);
+            //imp = IJ.createHyperStack( filename + ": " + dsetName,
+            //                           nCols, nRows, nChannels, nLevels, nFrames, nBits);
+            imp = IJ.createImage(filename + ": " + dsetName,
+                    impTypeText, nCols, nRows, nChannels, nLevels, nFrames);
             imp.getCalibration().pixelDepth  = element_size_um[0];
             imp.getCalibration().pixelHeight = element_size_um[1];
             imp.getCalibration().pixelWidth  = element_size_um[2];
             imp.getCalibration().setUnit("micrometer");
-            imp.setDisplayRange(0,255);
+            if (typeText.contains("uint")) {
+                if (typeText.contains("uint8") && isRGB)
+                    imp.setDisplayRange(0, 255);
+                else
+                    imp.setDisplayRange(0, Math.pow(2, nBits)-1);
+            } else if (typeText.contains("int")) {
+                imp.setDisplayRange(-Math.pow(2, nBits-1), Math.pow(2, nBits-1)-1);
+            }
           }
 
           // copy slices to hyperstack
@@ -334,6 +346,20 @@ public class HDF5ImageJ
             for (int i = 0; i < data.length; ++i) {
               if (data[i] > maxGray) maxGray = data[i];
             }
+          //} else if (typeText.equals("uint24")) {
+          } else if (typeText.equals("uint32") || typeText.equals("uint24")) {
+              MDIntArray rawdata = reader.int32().readMDArray(dsetName);
+              for( int lev = 0; lev < nLevels; ++lev) {
+                  ImageProcessor ip = imp.getStack().getProcessor( imp.getStackIndex(
+                          channel+1, lev+1, frame+1));
+                  System.arraycopy( rawdata.getAsFlatArray(), lev*sliceSize,
+                          (int[])ip.getPixels(),   0,
+                          sliceSize);
+              }
+              int[] data = rawdata.getAsFlatArray();
+              for (int i = 0; i < data.length; ++i) {
+                 if (data[i] > maxGray) maxGray = data[i];
+              }
           } else if (typeText.equals( "float32") || typeText.equals( "float64") ) {
             MDFloatArray rawdata = reader.float32().readMDArray(dsetName);
             for( int lev = 0; lev < nLevels; ++lev) {
@@ -994,7 +1020,11 @@ public class HDF5ImageJ
       }
     } else if (type.equals("uint16") || type.equals("int16")) {
       nBits = 16;
+    } else if (type.equals("uint24") || type.equals("int24")) {
+      nBits = 32;
     } else if (type.equals("float32") || type.equals("float64")) {
+      nBits = 32;
+    } else if (type.equals("uint32") || type.equals("int32")) {
       nBits = 32;
     } else {
       IJ.error("Type '" + type + "' Not handled yet!");
@@ -1002,6 +1032,28 @@ public class HDF5ImageJ
     return nBits;
   }
 
+  //-----------------------------------------------------------------------------
+   static String assignHDF5TypeToImagePlusTypeString(String h5Type, boolean isRGB, int channels) {
+       int nBits = assignHDF5TypeToImagePlusBitdepth(h5Type, isRGB);
+       return assignHDF5TypeToImagePlusTypeString(h5Type, isRGB, channels, nBits);
+   }
+
+   static String assignHDF5TypeToImagePlusTypeString(String h5Type, boolean isRGB, int channels, int nBits) {
+        StringBuilder strb = new StringBuilder(32);
+        if (isRGB)
+                strb.append("rgb ");
+        if (nBits == 32 && h5Type.contains("int"))
+            strb.append(" 32-bit int ");
+        else
+            strb.append(nBits);
+        if (!isRGB) {
+            if (channels > 1)
+                strb.append(" composite ");
+            else
+                strb.append(" grayscale ");
+        }
+        return strb.toString();
+   }
 
   //-----------------------------------------------------------------------------
    static String[] createNameList( String formatString, int nElements)
